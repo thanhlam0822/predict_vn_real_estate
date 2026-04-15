@@ -2,12 +2,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="AI Định Giá BĐS Việt Nam", layout="wide")
 
+
 @st.cache_resource
 def load_pipeline():
-    return joblib.load('vietnam_lgbm_pipeline.pkl') # Nhớ sửa lại đường dẫn
+    return joblib.load('model/vietnam_lgbm_pipeline_v2.pkl')
+
 
 try:
     pipeline = load_pipeline()
@@ -20,13 +23,15 @@ except Exception as e:
     st.error(f"Lỗi: Không thể tải mô hình. Chi tiết: {e}")
     st.stop()
 
+
 def is_valid_name(name):
     if pd.isna(name) or name is None:
         return False
     val_str = str(name).strip()
-    if val_str == "" or val_str.isnumeric():
+    if val_str == "" or val_str.isnumeric() or val_str.lower() == 'nan':
         return False
     return True
+
 
 st.title("🏡 Hệ Thống Thẩm Định Bất Động Sản Bằng AI")
 st.markdown("---")
@@ -36,36 +41,30 @@ st.subheader("📝 Thông tin chi tiết bất động sản")
 col1, col2 = st.columns(2)
 
 with col1:
-    # 1. TỈNH THÀNH
     raw_prov_list = list(hierarchy.keys()) if hierarchy else []
     prov_list = [p for p in raw_prov_list if is_valid_name(p)]
     if not prov_list: prov_list = ["Hồ Chí Minh"]
-
-    # Dùng key để Streamlit tự động quản lý state
     province = st.selectbox("Tỉnh / Thành phố", prov_list, key="sel_prov")
 
-    # 2. QUẬN HUYỆN
-    raw_dist_list = list(hierarchy[province].keys()) if (hierarchy and province in hierarchy) else []
+    raw_dist_list = list(hierarchy.get(province, {}).keys()) if hierarchy else []
     dist_list = [d for d in raw_dist_list if is_valid_name(d)]
     if not dist_list: dist_list = ["Quận 1"]
     district = st.selectbox("Quận / Huyện", dist_list, key="sel_dist")
 
-    # 3. PHƯỜNG XÃ
-    raw_ward_list = hierarchy[province][district] if (hierarchy and province in hierarchy and district in hierarchy[province]) else []
+    raw_ward_list = hierarchy.get(province, {}).get(district, []) if hierarchy else []
     ward_list = [w for w in raw_ward_list if is_valid_name(w)]
     if not ward_list: ward_list = ["Phường Bến Nghé"]
     ward = st.selectbox("Phường / Xã", ward_list, key="sel_ward")
 
-    # 4. LOẠI HÌNH
-    prop_type = st.selectbox("Loại hình", ["Căn hộ chung cư", "Nhà ngõ, hẻm", "Nhà mặt phố", "Biệt thự, nhà liền kề"], key="sel_prop")
-
-    # 5. HƯỚNG NHÀ
-    house_dir = st.selectbox("Hướng nhà (Ban công/Cửa chính)", ["Đông", "Tây", "Nam", "Bắc", "Đông Nam", "Tây Nam", "Đông Bắc", "Tây Bắc", "KXĐ"], key="sel_dir")
+    prop_type = st.selectbox("Loại hình", ["Căn hộ chung cư", "Nhà ngõ, hẻm", "Nhà mặt phố", "Biệt thự, nhà liền kề"],
+                             key="sel_prop")
+    house_dir = st.selectbox("Hướng nhà (Ban công/Cửa chính)",
+                             ["Đông", "Tây", "Nam", "Bắc", "Đông Nam", "Tây Nam", "Đông Bắc", "Tây Bắc", "KXĐ"],
+                             key="sel_dir")
 
 with col2:
     area = st.number_input("Diện tích (m²)", 20.0, 1000.0, 65.0, key="num_area")
 
-    # LOGIC ĐỔI NHÃN CHO TẦNG
     if prop_type == "Căn hộ chung cư":
         floor_label = "Vị trí tầng (Để số 8 nếu không rõ)"
         floor_default = 8
@@ -80,7 +79,6 @@ with col2:
     with c_bath:
         bath = st.number_input("Phòng vệ sinh", 1, 10, 2, key="num_bath")
 
-    # LOGIC ẨN HIỆN MẶT TIỀN (Giữ state an toàn)
     if prop_type == "Căn hộ chung cư":
         st.info("💡 Chung cư không tính Mặt tiền và Đường vào.")
         frontage = 0.0
@@ -90,11 +88,10 @@ with col2:
         road = st.number_input("Đường trước nhà (m) - Hẻm/Phố", 1.0, 50.0, 3.0, key="num_road")
 
 st.markdown("---")
-gia_rao_ban = st.number_input("💰 Giá chủ nhà rao bán (Tỷ VNĐ) - Để tính chiến lược", 0.0, 500.0, 0.0, key="num_price")
+gia_rao_ban = st.number_input("💰 Giá chủ nhà rao bán (Tỷ VNĐ) - Nhập để AI tư vấn chiến lược", 0.0, 500.0, 0.0,
+                              key="num_price")
 
-# XỬ LÝ NÚT BẤM
 if st.button("Thẩm Định Ngay", use_container_width=True):
-
     room_density = (bed + bath) / area
     frontage_ratio = frontage / (road + 1)
 
@@ -113,7 +110,7 @@ if st.button("Thẩm Định Ngay", use_container_width=True):
     for col in cat_cols:
         input_df[col] = input_df[col].astype('category')
 
-    with st.spinner("AI đang phân tích dữ liệu..."):
+    with st.spinner("AI đang phân tích hàng triệu dữ liệu thị trường..."):
         try:
             pred_log = model.predict(input_df)[0]
             pred_real = np.expm1(pred_log) / 1e9
@@ -139,5 +136,53 @@ if st.button("Thẩm Định Ngay", use_container_width=True):
                 else:
                     st.warning(f"⚠️ TÍN HIỆU ĐÀM PHÁN: Giá khá sát thị trường. Ép giá quanh mốc {bien_duoi:.2f} Tỷ.")
 
+            st.markdown("---")
+            st.subheader("🔍 Tại sao AI đưa ra mức giá này?")
+            st.info("Biểu đồ thể hiện **Tỷ lệ phần trăm (%) đóng góp** của từng yếu tố vào quyết định định giá.")
+
+            importance_gain = model.booster_.feature_importance(importance_type='gain')
+            feature_names = model.booster_.feature_name()
+            importance_percent = (importance_gain / importance_gain.sum()) * 100
+
+            df_importance = pd.DataFrame({
+                'Feature': feature_names,
+                'Importance': importance_percent
+            })
+
+            dict_labels = {
+                'avg_price_district': 'Giá trung bình Quận/Huyện',
+                'area': 'Diện tích (m²)',
+                'avg_price_province': 'Giá trung bình Tỉnh/Thành',
+                'ward_name': 'Phường/Xã',
+                'district_name': 'Quận/Huyện',
+                'floor_count': 'Số tầng / Vị trí tầng',
+                'road_width': 'Đường trước nhà',
+                'frontage_width': 'Mặt tiền',
+                'room_density': 'Mật độ phòng (Nhồi nhét)',
+                'frontage_ratio': 'Tỷ lệ Vàng (Mặt tiền/Đường)',
+                'house_direction': 'Hướng nhà',
+                'property_type_name': 'Loại hình BĐS'
+            }
+            df_importance['Feature'] = df_importance['Feature'].map(dict_labels).fillna(df_importance['Feature'])
+            df_importance = df_importance.sort_values(by='Importance', ascending=True).tail(10)
+
+            fig, ax = plt.subplots(figsize=(10, 5))
+            bars = ax.barh(df_importance['Feature'], df_importance['Importance'], color='#3498db', edgecolor='black',
+                           alpha=0.8)
+
+            for bar in bars:
+                width = bar.get_width()
+                ax.text(width + 0.5, bar.get_y() + bar.get_height() / 2,
+                        f'{width:.1f}%',
+                        va='center', ha='left', fontsize=11, fontweight='bold', color='#2c3e50')
+
+            ax.set_xlabel('Tỷ trọng quyết định (%)', fontsize=12, fontweight='bold')
+            ax.spines['right'].set_visible(False)
+            ax.spines['top'].set_visible(False)
+
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.clf()
+
         except Exception as e:
-            st.error(f"Có lỗi xảy ra trong quá trình tính toán: {e}")
+            st.error(f"Có lỗi xảy ra trong quá trình dự báo: {e}")
